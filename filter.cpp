@@ -27,14 +27,63 @@ cv::Mat colorize(cv::Mat labelImage, int nLabels) {
 }
 
 const char* keys =
-  { "{help h||}{@image|../data/stuff.jpg|image for converting to a grayscale}" };
+  { "{help h||}{@image||image for converting to a grayscale}" };
+
+
+bool clipped(cv::Mat alpha) {
+
+  double top = cv::sum(alpha.row(0))[0];
+  double bot = cv::sum(alpha.row(alpha.rows - 1))[0];
+
+  double left = cv::sum(alpha.col(0))[0];
+  double right = cv::sum(alpha.col(alpha.cols - 1))[0];
+
+  return (top > alpha.cols * 0.25 || bot > alpha.rows * 0.25
+        || left > alpha.cols * 0.25 || right > alpha.rows * 0.25);
+}
+
+bool bestComponent(cv::Mat const &alpha, cv::Mat& mask) {
+  cv::Mat1s stats;
+  cv::Mat1d centroids;
+
+  cv::Mat labels;
+  int n = cv::connectedComponentsWithStats(alpha, labels, stats, centroids,  8);
+  int totalArea = alpha.cols * alpha.rows;
+
+  int best = -1;
+  float bestArea = 0;
+
+  for(int i = 0; i < n; ++i) {
+    std::cout << i << " of " << n << std::endl;
+    cv::Mat label = (labels == i) & 255;
+    float area = stats(i, CC_STAT_AREA);
+
+    if(area > float(totalArea) * 0.15) {
+      vector<vector<Point> > contours;
+      findContours( label.clone(), contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+
+      if(contours.size() == 1 && !isContourConvex(contours[0]) && area > bestArea) {
+        best = i;
+        bestArea = stats(i, CC_STAT_AREA);
+      }
+    }
+  }
+
+  if(best >= 0) {
+    mask = (labels == best) & 255;
+    return true;
+  }
+
+  return false;
+}
+
 
 int main( int argc, const char** argv )
 {
     CommandLineParser parser(argc, argv, keys);
 
     string inputImage = parser.get<string>(0);
-    cv::Mat img = imread(inputImage.c_str(), 0);
+    cv::Mat img = imread(inputImage.c_str(), IMREAD_UNCHANGED);
 
     if(img.empty())
     {
@@ -45,19 +94,17 @@ int main( int argc, const char** argv )
     std::vector<cv::Mat1b> channels;
     cv::split(img, channels);
 
-    cv::Mat1b alpha = channels[0];
+    cv::Mat1b alpha = channels[3] > 50;
+    cv::Mat mask;
 
-    cv::Mat2d centroids;
-    cv::Mat1s stats;
-
-    cv::Mat labels;
-    int n = cv::connectedComponentsWithStats(alpha, labels, stats, centroids, 8);
-
-    
-
-    imshow( "image", colorize(labels, n) );
+    if(!clipped(alpha) && bestComponent(alpha, mask)) {
 
 
-    waitKey(0);
+
+    }
+
+
+
+
     return 0;
 }
