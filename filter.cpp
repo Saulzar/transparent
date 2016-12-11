@@ -4,6 +4,12 @@
 #include "opencv2/highgui.hpp"
 #include <iostream>
 
+#include <boost/filesystem.hpp>
+#include <boost/range/iterator_range.hpp>
+#include <iostream>
+
+using namespace boost::filesystem;
+
 using namespace cv;
 using namespace std;
 
@@ -27,7 +33,7 @@ cv::Mat colorize(cv::Mat labelImage, int nLabels) {
 }
 
 const char* keys =
-  { "{help h||}{@image||image for converting to a grayscale}" };
+  { "{help h||}{@input||input path}" };
 
 
 bool clipped(cv::Mat alpha) {
@@ -77,33 +83,49 @@ bool bestComponent(cv::Mat const &alpha, cv::Mat& mask) {
   return false;
 }
 
+bool keepImage(cv::Mat &result, std::string const &path) {
+  cv::Mat img = imread(path.c_str(), cv::IMREAD_UNCHANGED);
+
+  if(img.empty() || img.channels() != 4) return false;
+
+
+  std::vector<cv::Mat1b> channels;
+  cv::split(img, channels);
+
+  cv::Mat1b alpha = channels[3] > 0;
+  cv::Mat mask;
+
+  std::cout << clipped(alpha) << " " << std::endl;
+
+
+  if(!clipped(alpha) && bestComponent(alpha, mask)) {
+    cv::Mat1b alpha_;
+    cv::min(channels[3], mask, alpha_);
+
+    channels[3] = alpha_;
+    cv::merge(channels, result);
+
+    return true;
+  }
+
+  return false;
+}
 
 int main( int argc, const char** argv )
 {
     CommandLineParser parser(argc, argv, keys);
+    string inputPath = parser.get<string>(0);
 
-    string inputImage = parser.get<string>(0);
-    cv::Mat img = imread(inputImage.c_str(), IMREAD_UNCHANGED);
+    cv::Mat image;
+    for(auto& entry : boost::make_iterator_range(directory_iterator(inputPath), {})) {
+      if( !is_regular_file( entry.status() ) ) continue;
 
-    if(img.empty())
-    {
-        cout << "Could not read input image file: " << inputImage << endl;
-        return -1;
+      std::cout << entry.path() << std::endl;
+      if(keepImage(image, entry.path().c_str())) {
+        cv::imshow("image", image);
+        cv::waitKey(0);
+      }
     }
-
-    std::vector<cv::Mat1b> channels;
-    cv::split(img, channels);
-
-    cv::Mat1b alpha = channels[3] > 50;
-    cv::Mat mask;
-
-    if(!clipped(alpha) && bestComponent(alpha, mask)) {
-
-
-
-    }
-
-
 
 
     return 0;
