@@ -38,8 +38,7 @@ inline void display(cv::Mat const &image) {
 }
 
 
-const char* keys =
-  { "{help h||}{@input||input path}" };
+
 
 
 bool clipped(cv::Mat const& alpha) {
@@ -147,8 +146,6 @@ bool keepImage(cv::Mat4b &result, std::string const &path) {
     cv::GaussianBlur(mask, mask, cv::Size(9, 9), 0);
     r = alpha.mul(mask + mask, 1.0/255);
 
-    display(mask);
-
     result = replaceAlpha(img, r);
     return true;
   }
@@ -165,20 +162,8 @@ cv::Mat4b trimAlpha(cv::Mat4b const &image) {
   vector<vector<Point> > contours;
   findContours(alpha, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
 
-  RotatedRect rect = cv::minAreaRect(contours[0]);
-  Size size = rect.size;
-  float angle = rect.angle;
-  if(angle < -45.) {
-    angle += 90.0;
-    swap(size.width, size.height);
-  }
-
-  Mat m = getRotationMatrix2D(rect.center, angle, 1.0);
-  Mat trimmed;
-
-  warpAffine(image, trimmed, m, image.size(), INTER_CUBIC);
-
-  return trimmed;
+  cv::Rect rect = boundingRect(contours[0]);
+  return image(rect).clone();
 }
 
 cv::Mat checkers(int w, int h, int blockSize) {
@@ -220,26 +205,38 @@ cv::Mat alphaBlend(const Mat4b& image, Mat3b const& dest) {
 }
 
 
+cv::Mat3b onCheckers(cv::Mat4b const &image) {
+  cv::Mat bg = checkers(image.cols, image.rows, 12);
+  return alphaBlend(image, bg);
+}
+
+const char* keys =
+  { "{help h||}{@input||input path}{@output|output|output path}" };
+
 int main( int argc, const char** argv )
 {
     CommandLineParser parser(argc, argv, keys);
     string inputPath = parser.get<string>(0);
+    path outputPath (parser.get<string>(1));
 
     cv::Mat4b image;
     for(auto& entry : boost::make_iterator_range(directory_iterator(inputPath), {})) {
       if( !is_regular_file( entry.status() ) ) continue;
 
-      std::string path = entry.path().c_str();
-      if(keepImage(image, path)) {
-
-        cv::Mat bg = checkers(image.cols, image.rows, 12);
-
+      path p = entry.path();
+      if(keepImage(image, p.string())) {
         image = trimAlpha(image);
-        cv::Mat out = alphaBlend(image, bg);
+        //display(onCheckers(image));
 
-        display(out);
+        path out = outputPath / p.stem().replace_extension("png");
+        std::cout << out.c_str() << std::endl;
 
+        imwrite(out.c_str(), image);
       }
+
+
+
+
     }
 
     return 0;
