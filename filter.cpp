@@ -32,45 +32,60 @@ cv::Mat colorize(cv::Mat labelImage, int nLabels) {
   return dst;
 }
 
+inline void display(cv::Mat const &image) {
+  cv::imshow("image", image);
+  cv::waitKey(0);
+}
+
+
 const char* keys =
   { "{help h||}{@input||input path}" };
 
 
-bool clipped(cv::Mat alpha) {
+bool clipped(cv::Mat const& alpha) {
 
-  double top = cv::sum(alpha.row(0))[0];
-  double bot = cv::sum(alpha.row(alpha.rows - 1))[0];
+  cv::Mat thresh = alpha > 50;
 
-  double left = cv::sum(alpha.col(0))[0];
-  double right = cv::sum(alpha.col(alpha.cols - 1))[0];
+  int top = cv::countNonZero(alpha.row(0));
+  int bot = cv::countNonZero(alpha.row(alpha.rows - 1));
 
-  return (top > alpha.cols * 0.25 || bot > alpha.rows * 0.25
-        || left > alpha.cols * 0.25 || right > alpha.rows * 0.25);
+  int left = cv::countNonZero(alpha.col(0));
+  int right = cv::countNonZero(alpha.col(alpha.cols - 1));
+
+
+  return (top > alpha.cols * 0.05 || bot > alpha.rows * 0.05
+        || left > alpha.cols * 0.05 || right > alpha.rows * 0.05);
 }
 
-bool bestComponent(cv::Mat const &alpha, cv::Mat& mask) {
-  cv::Mat1s stats;
-  cv::Mat1d centroids;
-
-  cv::Mat labels;
-  int n = cv::connectedComponentsWithStats(alpha, labels, stats, centroids,  8);
+bool bestComponent(cv::Mat1b const &alpha, cv::Mat& mask) {
   int totalArea = alpha.cols * alpha.rows;
+
+  cv::Mat1i labels;
+  int n = cv::connectedComponents(alpha > 200, labels, 8, CV_32S);
 
   int best = -1;
   float bestArea = 0;
 
-  for(int i = 0; i < n; ++i) {
-    std::cout << i << " of " << n << std::endl;
-    cv::Mat label = (labels == i) & 255;
-    float area = stats(i, CC_STAT_AREA);
 
-    if(area > float(totalArea) * 0.15) {
+
+  for(int i = 0; i < n; ++i) {
+    cv::Mat label = alpha.mul(labels == i, 1);
+    float area = cv::countNonZero(label);
+
+    if(!clipped(label) && area > float(totalArea) * 0.1) {
       vector<vector<Point> > contours;
       findContours( label.clone(), contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
 
-      if(contours.size() == 1 && !isContourConvex(contours[0]) && area > bestArea) {
-        best = i;
-        bestArea = stats(i, CC_STAT_AREA);
+      if(contours.size() == 1 && area > bestArea) {
+
+        vector<Point> approx;
+        approxPolyDP(contours[0], approx, 4.0, true);
+
+        if(!isContourConvex(approx)) {
+
+          best = i;
+          bestArea = area;
+        }
       }
     }
   }
@@ -83,50 +98,149 @@ bool bestComponent(cv::Mat const &alpha, cv::Mat& mask) {
   return false;
 }
 
-bool keepImage(cv::Mat &result, std::string const &path) {
-  cv::Mat img = imread(path.c_str(), cv::IMREAD_UNCHANGED);
 
+inline cv::Mat1b getAlpha(cv::Mat4b const &image) {
+  std::vector<cv::Mat1b> channels;
+  cv::split(image, channels);
+
+  return channels[3];
+}
+
+inline cv::Mat3b getRgb(cv::Mat4b const &image) {
+  std::vector<cv::Mat1b> channels;
+  cv::split(image, channels);
+
+  cv::Mat3b rgb;
+  merge(std::vector<Mat1b> {channels[0], channels[1], channels[2]}, rgb);
+
+  return rgb;
+}
+
+
+
+
+inline cv::Mat4b replaceAlpha(cv::Mat4b const &image, cv::Mat1b const &alpha) {
+  std::vector<cv::Mat1b> channels;
+  cv::split(image, channels);
+
+  channels[3] = alpha;
+
+  cv::Mat result;
+  cv::merge(channels, result);
+
+  return result;
+
+}
+
+
+bool keepImage(cv::Mat4b &result, std::string const &path) {
+
+  cv::Mat4b img = imread(path.c_str(), cv::IMREAD_UNCHANGED);
   if(img.empty() || img.channels() != 4) return false;
 
+  cv::Mat1b alpha = getAlpha(img);
 
-  std::vector<cv::Mat1b> channels;
-  cv::split(img, channels);
-
-  cv::Mat1b alpha = channels[3] > 0;
   cv::Mat mask;
+  if(bestComponent(alpha, mask)) {
+    cv::Mat1b r;
 
-  std::cout << clipped(alpha) << " " << std::endl;
+    cv::GaussianBlur(mask, mask, cv::Size(9, 9), 0);
+    r = alpha.mul(mask + mask, 1.0/255);
 
+    display(mask);
 
-  if(!clipped(alpha) && bestComponent(alpha, mask)) {
-    cv::Mat1b alpha_;
-    cv::min(channels[3], mask, alpha_);
-
-    channels[3] = alpha_;
-    cv::merge(channels, result);
-
+    result = replaceAlpha(img, r);
     return true;
   }
 
   return false;
 }
 
+
+
+
+cv::Mat4b trimAlpha(cv::Mat4b const &image) {
+  cv::Mat1b alpha = getAlpha(image);
+
+  vector<vector<Point> > contours;
+  findContours(alpha, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+
+  RotatedRect rect = cv::minAreaRect(contours[0]);
+  Size size = rect.size;
+  float angle = rect.angle;
+  if(angle < -45.) {
+    angle += 90.0;
+    swap(size.width, size.height);
+  }
+
+  Mat m = getRotationMatrix2D(rect.center, angle, 1.0);
+  Mat trimmed;
+
+  warpAffine(image, trimmed, m, image.size(), INTER_CUBIC);
+
+  return trimmed;
+}
+
+cv::Mat checkers(int w, int h, int blockSize) {
+
+  Mat3b img(h, w);
+  img.setTo(cv::Scalar(127, 127, 127));
+
+  for(int i = 0; i < w; i += blockSize) {
+    for(int j = 0; j < h; j += blockSize) {
+
+      if((i / blockSize + j / blockSize) & 1) {
+        auto cols = Range(j, min(h, j + blockSize - 1));
+        auto rows = Range(i, min(w, i + blockSize - 1));
+
+        img(cols, rows).setTo(cv::Scalar(192, 192, 192));
+      }
+    }
+  }
+
+  return img;
+}
+
+inline cv::Mat dup(cv::Mat1b const &a, int n) {
+  std::vector<cv::Mat1b> v(n, a);
+
+  cv::Mat m;
+  cv::merge(v, m);
+
+  return m;
+}
+
+cv::Mat alphaBlend(const Mat4b& image, Mat3b const& dest) {
+
+  cv::Mat3b alpha = dup(getAlpha(image), 3);
+  cv::Mat3b rgb = getRgb(image);
+
+  cv::Mat blend = rgb.mul(alpha, 1.0/255) + dest.mul(cv::Scalar(255, 255, 255) - alpha, 1.0/255);
+  return blend;
+}
+
+
 int main( int argc, const char** argv )
 {
     CommandLineParser parser(argc, argv, keys);
     string inputPath = parser.get<string>(0);
 
-    cv::Mat image;
+    cv::Mat4b image;
     for(auto& entry : boost::make_iterator_range(directory_iterator(inputPath), {})) {
       if( !is_regular_file( entry.status() ) ) continue;
 
-      std::cout << entry.path() << std::endl;
-      if(keepImage(image, entry.path().c_str())) {
-        cv::imshow("image", image);
-        cv::waitKey(0);
+      std::string path = entry.path().c_str();
+      if(keepImage(image, path)) {
+
+        cv::Mat bg = checkers(image.cols, image.rows, 12);
+
+        image = trimAlpha(image);
+        cv::Mat out = alphaBlend(image, bg);
+
+        display(out);
+
       }
     }
-
 
     return 0;
 }
