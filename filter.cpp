@@ -134,9 +134,10 @@ inline cv::Mat4b replaceAlpha(cv::Mat4b const &image, cv::Mat1b const &alpha) {
 
 bool keepImage(cv::Mat4b &result, std::string const &path) {
 
-  cv::Mat4b img = imread(path.c_str(), cv::IMREAD_UNCHANGED);
-  if(img.empty() || img.channels() != 4) return false;
+  cv::Mat loaded = imread(path.c_str(), cv::IMREAD_UNCHANGED);
+  if(loaded.empty() || loaded.channels() != 4) return false;
 
+  cv::Mat4b img = loaded;
   cv::Mat1b alpha = getAlpha(img);
 
   cv::Mat mask;
@@ -219,19 +220,32 @@ int main( int argc, const char** argv )
     string inputPath = parser.get<string>(0);
     path outputPath (parser.get<string>(1));
 
+    create_directories(outputPath / "good");
+    create_directories(outputPath / "bad");
+
+
     cv::Mat4b image;
     for(auto& entry : boost::make_iterator_range(directory_iterator(inputPath), {})) {
       if( !is_regular_file( entry.status() ) ) continue;
 
       path p = entry.path();
-      if(keepImage(image, p.string())) {
-        image = trimAlpha(image);
-        //display(onCheckers(image));
 
-        path out = outputPath / p.stem().replace_extension("png");
-        std::cout << out.c_str() << std::endl;
+      path png = p.stem().replace_extension("png");
+      path good = outputPath / "good" / png;
+      path bad = outputPath / "bad" / png;
 
-        imwrite(out.c_str(), image);
+
+      if(!exists(good) && !exists(bad)) {
+        std::cout << png << std::endl;
+
+        if(keepImage(image, p.string())) {
+          image = trimAlpha(image);
+          //display(onCheckers(image));
+
+          imwrite(good.c_str(), image);
+        } else {
+          copy_file(p, bad);
+        }
       }
 
 
